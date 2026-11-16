@@ -1,0 +1,16 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache & Jupyter checkpoints
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Raw data (keep processed parquet so the Streamlit app works out of the box)
+data/raw/*.csv
+
+# OS / IDE files
+.vscode/
+.DS_Store
