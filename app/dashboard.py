@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
+from scipy import stats
+from typing import cast
 
 # ---------------------------------------------------------
 # 1. Page Configuration & Data Loading
@@ -94,11 +96,12 @@ st.markdown("---")
 # ---------------------------------------------------------
 # 4. Analytical Tabs
 # ---------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1. Sectoral Shift",
     "2. Trade Openness & Tariffs",
     "3. High-Tech & External Flows",
-    "4. Raw Data Explorer"
+    "4. Raw Data Explorer",
+    "5. Era Comparison (1991 Reforms)"
 ])
 
 # --- TAB 1: Sectoral Transformation ---
@@ -205,3 +208,82 @@ with tab4:
     st.dataframe(kpi_df, use_container_width=True)
     csv_export = kpi_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Filtered CSV", data=csv_export, file_name="india_econ_filtered.csv", mime="text/csv")
+# --- TAB 5: Pre- vs. Post-1991 Era Comparison ---
+with tab5:
+    st.subheader("Structural Break Analysis: Pre- vs. Post-1991 Liberalization")
+    st.write(
+        "Comparing average macroeconomic performance across three policy regimes: "
+        "**Pre-1991 (1961–1990)**, **Post-Reform Boom (1991–2019)**, and **Post-COVID (2020–2025)**."
+    )
+
+    era_indicators = {
+        "NY.GNP.PCAP.KD.ZG": "GNI per Capita Growth (Annual %)",
+        "NV.AGR.TOTL.ZS": "Agriculture Share (% of GDP)",
+        "NV.IND.MANF.ZS": "Manufacturing Share (% of GDP)",
+        "NV.SRV.TOTL.ZS": "Services Share (% of GDP)",
+        "NE.TRD.GNFS.ZS": "Trade Openness (% of GDP)",
+        "TM.TAX.MRCH.WM.AR.ZS": "Applied Tariff Rate (%)",
+        "BX.TRF.PWKR.DT.GD.ZS": "Remittances (% of GDP)"
+    }
+
+    era_df = query_data(f"""
+        SELECT "Indicator Code", Year, Value
+        FROM '{DATA_PATH}'
+        WHERE "Indicator Code" IN {tuple(era_indicators.keys())}
+          AND Year >= 1961
+    """)
+
+    def assign_era(yr):
+        if yr <= 1990:
+            return "1. Pre-1991 (1961–1990)"
+        elif yr <= 2019:
+            return "2. Post-Reform (1991–2019)"
+        else:
+            return "3. Post-COVID (2020–2025)"
+
+    era_df["Era"] = era_df["Year"].apply(assign_era)
+    era_df["Indicator"] = era_df["Indicator Code"].map(era_indicators)
+
+    # Calculate Era Means & Statistical Significance (Pre-1991 vs Post-Reform 1991-2019)
+    summary_rows = []
+    for code, label in era_indicators.items():
+        sub = era_df[era_df["Indicator Code"] == code]
+        pre = sub[sub["Era"] == "1. Pre-1991 (1961–1990)"]["Value"].dropna()
+        post = sub[sub["Era"] == "2. Post-Reform (1991–2019)"]["Value"].dropna()
+        covid = sub[sub["Era"] == "3. Post-COVID (2020–2025)"]["Value"].dropna()
+
+        pre_mean = pre.mean() if not pre.empty else None
+        post_mean = post.mean() if not post.empty else None
+        covid_mean = covid.mean() if not covid.empty else None
+
+        if len(pre) > 2 and len(post) > 2:
+            res = stats.ttest_ind(post, pre, equal_var=False)
+            #_, p_val = stats.ttest_ind(post, pre, equal_var=False)
+            p_val = cast(float, res[1])  # Satisfies Pylance static type checker
+            sig = "Yes (p < 0.01)" if p_val < 0.01 else ("Yes (p < 0.05)" if p_val < 0.05 else "No")
+        else:
+            sig = "Insufficient pre-91 data"
+
+        summary_rows.append({
+            "Indicator": label,
+            "Pre-1991 Mean": round(pre_mean, 2) if pre_mean is not None else None,
+            "Post-Reform Mean (1991–2019)": round(post_mean, 2) if post_mean is not None else None,
+            "Post-COVID Mean (2020–2025)": round(covid_mean, 2) if covid_mean is not None else None,
+            "Statistically Significant Shift?": sig
+        })
+
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+    # Visual Grouped Comparison
+    selected_metric = st.selectbox(
+        "Select an indicator to compare distribution across eras:",
+        options=list(era_indicators.values())
+    )
+    plot_sub = era_df[era_df["Indicator"] == selected_metric]
+    fig_box = px.box(
+        plot_sub, x="Era", y="Value", color="Era", points="all",
+        title=f"Distribution Across Policy Eras: {selected_metric}",
+        template="plotly_white"
+    )
+    fig_box.update_layout(showlegend=False)
+    st.plotly_chart(fig_box, use_container_width=True)
